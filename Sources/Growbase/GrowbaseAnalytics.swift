@@ -36,14 +36,13 @@ public actor GrowbaseAnalytics {
         guard !trackingKey.isEmpty else { throw GrowbaseAnalyticsError.invalidTrackingKey }
 
         let storageURL = try Self.defaultStorageURL(baseURL: baseURL, trackingKey: trackingKey)
-        self.baseURL = baseURL
-        self.trackingKey = trackingKey
-        self.session = .shared
-        self.storageURL = storageURL
-        self.encoder = Self.makeEncoder()
-        self.automaticallyFlush = true
-        self.state = try Self.loadState(from: storageURL)
-        try Self.write(state, to: storageURL, using: encoder)
+        try self.init(
+            baseURL: baseURL,
+            trackingKey: trackingKey,
+            session: .shared,
+            storageURL: storageURL,
+            automaticallyFlush: true
+        )
         Task { await self.flush() }
     }
 
@@ -57,6 +56,10 @@ public actor GrowbaseAnalytics {
         self.state = try Self.loadState(from: storageURL)
         try Self.write(state, to: storageURL, using: encoder)
     }
+
+    // MARK: Testing
+
+    var queuedItemCount: Int { state.queue.count }
 
     // MARK: Public
 
@@ -72,9 +75,7 @@ public actor GrowbaseAnalytics {
             properties: properties
         )
         try validateSize(of: event)
-        var proposedState = state
-        proposedState.queue.append(.event(event))
-        try commit(proposedState)
+        try updateState { $0.queue.append(.event(event)) }
         startFlush()
     }
 
@@ -85,18 +86,18 @@ public actor GrowbaseAnalytics {
         }
         let identify = IdentifyPayload(anonymousID: state.anonymousID, appUserID: userID)
         try validateSize(of: identify)
-        var proposedState = state
-        proposedState.queue.append(.identify(identify))
-        proposedState.appUserID = userID
-        try commit(proposedState)
+        try updateState {
+            $0.queue.append(.identify(identify))
+            $0.appUserID = userID
+        }
         startFlush()
     }
 
     public func reset() throws {
-        var proposedState = state
-        proposedState.anonymousID = UUID().uuidString
-        proposedState.appUserID = nil
-        try commit(proposedState)
+        try updateState {
+            $0.anonymousID = UUID().uuidString
+            $0.appUserID = nil
+        }
     }
 
     public func flush() async {
@@ -107,9 +108,7 @@ public actor GrowbaseAnalytics {
         while let item = state.queue.first {
             switch await send(item) {
             case .acknowledge, .drop:
-                var proposedState = state
-                proposedState.queue.removeFirst()
-                guard (try? commit(proposedState)) != nil else { return }
+                guard (try? updateState { $0.queue.removeFirst() }) != nil else { return }
                 retryAttempt = 0
             case .retry:
                 scheduleRetry()
@@ -155,18 +154,18 @@ public actor GrowbaseAnalytics {
         let nanoseconds = UInt64(min(pow(2.0, Double(retryAttempt - 1)), 60) * 1_000_000_000)
         retryTask = Task {
             try? await Task.sleep(nanoseconds: nanoseconds)
-            retryFinished()
+            retryTask = nil
             await flush()
         }
     }
 
-    private func retryFinished() {
-        retryTask = nil
-    }
-
     // MARK: Persistence
 
-    private func commit(_ proposedState: State) throws {
+    /// Applies `mutate` to a copy of the state and only adopts it once it has been persisted,
+    /// so a failed write leaves the in-memory state untouched.
+    private func updateState(_ mutate: (inout State) -> Void) throws {
+        var proposedState = state
+        mutate(&proposedState)
         try Self.write(proposedState, to: storageURL, using: encoder)
         state = proposedState
     }
@@ -242,8 +241,6 @@ public actor GrowbaseAnalytics {
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }
-
-    var queuedItemCount: Int { state.queue.count }
 }
 
 private extension GrowbaseAnalytics {
