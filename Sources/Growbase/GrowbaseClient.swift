@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-public enum GrowbaseAnalyticsError: Error, Equatable {
+public enum GrowbaseClientError: Error, Equatable {
     case invalidBaseURL
     case invalidTrackingKey
     case invalidValue(String)
@@ -12,7 +12,7 @@ public enum GrowbaseAnalyticsError: Error, Equatable {
     case identityConflict
 }
 
-public actor GrowbaseAnalytics {
+public actor GrowbaseClient {
     private static let maximumPayloadSize = 64 * 1024
     private static let maximumStringSize = 255
 
@@ -31,9 +31,9 @@ public actor GrowbaseAnalytics {
 
     public init(baseURL: URL, trackingKey: String) throws {
         guard let scheme = baseURL.scheme, ["http", "https"].contains(scheme), baseURL.host != nil else {
-            throw GrowbaseAnalyticsError.invalidBaseURL
+            throw GrowbaseClientError.invalidBaseURL
         }
-        guard !trackingKey.isEmpty else { throw GrowbaseAnalyticsError.invalidTrackingKey }
+        guard !trackingKey.isEmpty else { throw GrowbaseClientError.invalidTrackingKey }
 
         let storageURL = try Self.defaultStorageURL(baseURL: baseURL, trackingKey: trackingKey)
         try self.init(
@@ -82,7 +82,7 @@ public actor GrowbaseAnalytics {
     public func identify(_ userID: String) throws {
         try Self.validate(userID, field: "user ID")
         guard state.appUserID == nil || state.appUserID == userID else {
-            throw GrowbaseAnalyticsError.identityConflict
+            throw GrowbaseClientError.identityConflict
         }
         let identify = IdentifyPayload(anonymousID: state.anonymousID, appUserID: userID)
         try validateSize(of: identify)
@@ -189,7 +189,7 @@ public actor GrowbaseAnalytics {
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
-        ).appendingPathComponent("GrowbaseAnalytics", isDirectory: true)
+        ).appendingPathComponent("GrowbaseClient", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let scope = stableHash(baseURL.absoluteString + "\u{0}" + trackingKey)
         return root.appendingPathComponent("\(scope).json")
@@ -203,16 +203,16 @@ public actor GrowbaseAnalytics {
 
     private static func validate(_ value: String, field: String) throws {
         guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !value.contains("\0") else {
-            throw GrowbaseAnalyticsError.invalidValue(field)
+            throw GrowbaseClientError.invalidValue(field)
         }
         guard value.lengthOfBytes(using: .utf8) <= maximumStringSize else {
-            throw GrowbaseAnalyticsError.valueTooLong(field)
+            throw GrowbaseClientError.valueTooLong(field)
         }
     }
 
     private static func validate(properties: [String: JSONValue]) throws {
         for (key, value) in properties {
-            guard !key.contains("\0") else { throw GrowbaseAnalyticsError.invalidValue("property") }
+            guard !key.contains("\0") else { throw GrowbaseClientError.invalidValue("property") }
             try validate(property: value)
         }
     }
@@ -220,7 +220,7 @@ public actor GrowbaseAnalytics {
     private static func validate(property: JSONValue) throws {
         switch property {
         case .string(let value):
-            guard !value.contains("\0") else { throw GrowbaseAnalyticsError.invalidValue("property") }
+            guard !value.contains("\0") else { throw GrowbaseClientError.invalidValue("property") }
         case .object(let value):
             try validate(properties: value)
         case .array(let value):
@@ -232,7 +232,7 @@ public actor GrowbaseAnalytics {
 
     private func validateSize<T: Encodable>(of payload: T) throws {
         guard try encoder.encode(payload).count <= Self.maximumPayloadSize else {
-            throw GrowbaseAnalyticsError.payloadTooLarge
+            throw GrowbaseClientError.payloadTooLarge
         }
     }
 
@@ -243,7 +243,7 @@ public actor GrowbaseAnalytics {
     }
 }
 
-private extension GrowbaseAnalytics {
+private extension GrowbaseClient {
     struct State: Codable {
         var anonymousID: String
         var appUserID: String?

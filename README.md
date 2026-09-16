@@ -6,17 +6,17 @@ Add this directory as a local package in Xcode with **File → Add Package Depen
 import Foundation
 import Growbase
 
-let analytics = try GrowbaseAnalytics(
+let growbase = try GrowbaseClient(
     baseURL: URL(string: "https://growbase.dev")!,
     trackingKey: "your-public-tracking-key"
 )
 
-try await analytics.track("app_opened")
-try await analytics.track("workout_completed", properties: ["duration": 600])
-try await analytics.identify("your-user-id")
+try await growbase.track("app_opened")
+try await growbase.track("workout_completed", properties: ["duration": 600])
+try await growbase.identify("your-user-id")
 
 // On logout:
-try await analytics.reset()
+try await growbase.reset()
 ```
 
 The SDK creates and persists an anonymous ID. Call `identify` after account creation or sign-in; it queues the identity link before later events and attaches the user ID to them. Call `reset()` on logout to create a fresh anonymous identity. Reset before identifying a different signed-in user.
@@ -25,4 +25,4 @@ Events and identity calls are persisted before sending, sent in order, and retri
 
 Call `flush()` when your app enters the background to start sending queued work. iOS does not guarantee enough background execution time to finish. Unauthorized requests remain queued so a corrected key can retry them; payloads rejected as invalid by the server are discarded so they cannot block later events. A successful `track`, `identify`, or `reset` call means the change was validated and saved locally, not that the server has acknowledged it.
 
-Keep one `GrowbaseAnalytics` instance per base URL and tracking key. Instances with different keys use separate durable queues.
+Keep one `GrowbaseClient` instance per base URL and tracking key. Instances with different keys use separate durable queues.

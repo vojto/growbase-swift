@@ -6,13 +6,13 @@ import Testing
 @testable import Growbase
 
 @Suite(.serialized)
-struct GrowbaseAnalyticsTests {
+struct GrowbaseClientTests {
     @Test func persistsEventsAndSendsThemAfterRecreation() async throws {
         let storageURL = temporaryStorageURL()
         let session = makeSession()
         MockURLProtocol.responses = [200]
 
-        var analytics: GrowbaseAnalytics? = try GrowbaseAnalytics(
+        var analytics: GrowbaseClient? = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!,
             trackingKey: "key",
             session: session,
@@ -21,7 +21,7 @@ struct GrowbaseAnalyticsTests {
         try await analytics?.track("opened", properties: ["source": "notification"])
         analytics = nil
 
-        let restored = try GrowbaseAnalytics(
+        let restored = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!,
             trackingKey: "key",
             session: session,
@@ -41,7 +41,7 @@ struct GrowbaseAnalyticsTests {
     @Test func identifyAndResetPreserveQueuedIdentitySnapshots() async throws {
         let storageURL = temporaryStorageURL()
         MockURLProtocol.responses = Array(repeating: 200, count: 5)
-        let analytics = try GrowbaseAnalytics(
+        let analytics = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!,
             trackingKey: "key",
             session: makeSession(),
@@ -72,14 +72,14 @@ struct GrowbaseAnalyticsTests {
         let storageURL = temporaryStorageURL()
         let session = makeSession()
         MockURLProtocol.responses = [401, 200]
-        let analytics = try GrowbaseAnalytics(
+        let analytics = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!, trackingKey: "key",
             session: session, storageURL: storageURL
         )
         try await analytics.track("opened")
         await analytics.flush()
 
-        let restored = try GrowbaseAnalytics(
+        let restored = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!, trackingKey: "key",
             session: session, storageURL: storageURL
         )
@@ -94,7 +94,7 @@ struct GrowbaseAnalyticsTests {
     @Test func serverFailureRetriesQueuedEvent() async throws {
         let session = makeSession()
         MockURLProtocol.responses = [500, 200]
-        let analytics = try GrowbaseAnalytics(
+        let analytics = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!, trackingKey: "key",
             session: session, storageURL: temporaryStorageURL()
         )
@@ -111,26 +111,26 @@ struct GrowbaseAnalyticsTests {
     }
 
     @Test func rejectsOversizedValuesAndPayloads() async throws {
-        let analytics = try GrowbaseAnalytics(
+        let analytics = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!, trackingKey: "key",
             session: makeSession(), storageURL: temporaryStorageURL()
         )
-        await #expect(throws: GrowbaseAnalyticsError.self) {
+        await #expect(throws: GrowbaseClientError.self) {
             try await analytics.track(String(repeating: "a", count: 256))
         }
-        await #expect(throws: GrowbaseAnalyticsError.self) {
+        await #expect(throws: GrowbaseClientError.self) {
             try await analytics.track("large", properties: ["value": .string(String(repeating: "a", count: 70_000))])
         }
-        await #expect(throws: GrowbaseAnalyticsError.invalidValue("event name")) {
+        await #expect(throws: GrowbaseClientError.invalidValue("event name")) {
             try await analytics.track(" \n ")
         }
-        await #expect(throws: GrowbaseAnalyticsError.invalidValue("property")) {
+        await #expect(throws: GrowbaseClientError.invalidValue("property")) {
             try await analytics.track("nested", properties: ["object": ["items": ["valid", "bad\0value"]]])
         }
-        await #expect(throws: GrowbaseAnalyticsError.invalidValue("property")) {
+        await #expect(throws: GrowbaseClientError.invalidValue("property")) {
             try await analytics.track("key", properties: ["bad\0key": true])
         }
-        await #expect(throws: GrowbaseAnalyticsError.invalidValue("user ID")) {
+        await #expect(throws: GrowbaseClientError.invalidValue("user ID")) {
             try await analytics.identify("\0")
         }
         #expect(await analytics.queuedItemCount == 0)
@@ -138,7 +138,7 @@ struct GrowbaseAnalyticsTests {
 
     @Test func persistsAnonymousIdentityDuringInitialization() throws {
         let storageURL = temporaryStorageURL()
-        _ = try GrowbaseAnalytics(
+        _ = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!, trackingKey: "key",
             session: makeSession(), storageURL: storageURL
         )
@@ -146,12 +146,12 @@ struct GrowbaseAnalyticsTests {
     }
 
     @Test func requiresResetBeforeChangingIdentifiedUser() async throws {
-        let analytics = try GrowbaseAnalytics(
+        let analytics = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!, trackingKey: "key",
             session: makeSession(), storageURL: temporaryStorageURL()
         )
         try await analytics.identify("user-1")
-        await #expect(throws: GrowbaseAnalyticsError.identityConflict) {
+        await #expect(throws: GrowbaseClientError.identityConflict) {
             try await analytics.identify("user-2")
         }
         #expect(await analytics.queuedItemCount == 1)
@@ -161,7 +161,7 @@ struct GrowbaseAnalyticsTests {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("growbase-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let analytics = try GrowbaseAnalytics(
+        let analytics = try GrowbaseClient(
             baseURL: URL(string: "https://example.com")!, trackingKey: "key",
             session: makeSession(), storageURL: directory.appendingPathComponent("state.json")
         )
