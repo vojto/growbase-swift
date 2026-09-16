@@ -79,12 +79,13 @@ public actor GrowbaseClient {
         startFlush()
     }
 
-    public func identify(_ userID: String) throws {
+    public func identify(_ userID: String, email: String? = nil) throws {
         try Self.validate(userID, field: "user ID")
+        if let email { try Self.validate(email, field: "email") }
         guard state.appUserID == nil || state.appUserID == userID else {
             throw GrowbaseClientError.identityConflict
         }
-        let identify = IdentifyPayload(anonymousID: state.anonymousID, appUserID: userID)
+        let identify = IdentifyPayload(anonymousID: state.anonymousID, appUserID: userID, email: email)
         try validateSize(of: identify)
         try updateState {
             $0.queue.append(.identify(identify))
@@ -290,10 +291,12 @@ private extension GrowbaseClient {
     struct IdentifyPayload: Codable {
         let anonymousID: String
         let appUserID: String
+        let email: String?
 
         enum CodingKeys: String, CodingKey {
             case anonymousID = "anonymous_id"
             case appUserID = "app_user_id"
+            case email
         }
     }
 

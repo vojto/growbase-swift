@@ -91,6 +91,47 @@ struct GrowbaseClientTests {
         #expect(firstID == lastID)
     }
 
+    @Test func persistsIdentifyEmailAfterRecreation() async throws {
+        let storageURL = temporaryStorageURL()
+        let session = makeSession()
+        MockURLProtocol.responses = [401, 200]
+        var analytics: GrowbaseClient? = try GrowbaseClient(
+            baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: storageURL
+        )
+        try await analytics?.identify("user-1", email: "person@example.com")
+        await analytics?.flush()
+        analytics = nil
+
+        let restored = try GrowbaseClient(
+            baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: storageURL
+        )
+        await restored.flush()
+
+        let bodies = try MockURLProtocol.requests.map(requestBody)
+        #expect(bodies.count == 2)
+        #expect(bodies.allSatisfy { $0["app_user_id"] as? String == "user-1" })
+        #expect(bodies.allSatisfy { $0["email"] as? String == "person@example.com" })
+    }
+
+    @Test func retriesIdentifyEmailAfterServerFailure() async throws {
+        let session = makeSession()
+        MockURLProtocol.responses = [500, 200]
+        let analytics = try GrowbaseClient(
+            baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: temporaryStorageURL()
+        )
+        try await analytics.identify("user-1", email: "person@example.com")
+
+        await analytics.flush()
+        await analytics.flush()
+
+        let bodies = try MockURLProtocol.requests.map(requestBody)
+        #expect(bodies.count == 2)
+        #expect(bodies.allSatisfy { $0["email"] as? String == "person@example.com" })
+    }
+
     @Test func serverFailureRetriesQueuedEvent() async throws {
         let session = makeSession()
         MockURLProtocol.responses = [500, 200]
@@ -132,6 +173,9 @@ struct GrowbaseClientTests {
         }
         await #expect(throws: GrowbaseClientError.invalidValue("user ID")) {
             try await analytics.identify("\0")
+        }
+        await #expect(throws: GrowbaseClientError.invalidValue("email")) {
+            try await analytics.identify("user-1", email: " ")
         }
         #expect(await analytics.queuedItemCount == 0)
     }

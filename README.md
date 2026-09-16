@@ -13,13 +13,13 @@ let growbase = try GrowbaseClient(
 
 try await growbase.track("app_opened")
 try await growbase.track("workout_completed", properties: ["duration": 600])
-try await growbase.identify("your-user-id")
+try await growbase.identify(user.id, email: user.email)
 
 // On logout:
 try await growbase.reset()
 ```
 
-The SDK creates and persists an anonymous ID. Call `identify` after account creation or sign-in; it queues the identity link before later events and attaches the user ID to them. Call `reset()` on logout to create a fresh anonymous identity. Reset before identifying a different signed-in user.
+The SDK creates and persists an anonymous ID. Call `identify` after account creation or sign-in; email is optional, so `identify(user.id)` also works. Call `reset()` on logout before identifying a different user.
 
 Events and identity calls are persisted before sending, sent in order, and retried after temporary network or server failures. The tracking key is a public write-only credential and may be included in an app binary.
 
