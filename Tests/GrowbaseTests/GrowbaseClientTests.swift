@@ -217,6 +217,38 @@ struct GrowbaseClientTests {
         #expect(await analytics.queuedItemCount == 0)
     }
 
+    @Test func fullQueueDiscardsOldestEventBeforeIdentity() async throws {
+        let storageURL = temporaryStorageURL()
+        let analytics = try GrowbaseClient(
+            baseURL: URL(string: "https://example.com")!,
+            trackingKey: "key",
+            session: makeSession(),
+            storageURL: storageURL,
+            maximumQueueSize: 3
+        )
+
+        try await analytics.track("oldest")
+        try await analytics.identify("user-1")
+        try await analytics.track("newer")
+        try await analytics.track("newest")
+        #expect(await analytics.queuedItemCount == 3)
+
+        let restored = try GrowbaseClient(
+            baseURL: URL(string: "https://example.com")!,
+            trackingKey: "key",
+            session: makeSession(),
+            storageURL: storageURL,
+            maximumQueueSize: 2
+        )
+        #expect(await restored.queuedItemCount == 2)
+
+        await restored.flush()
+
+        let requests = MockURLProtocol.requests
+        #expect(requests.map(\.url!.path) == ["/api/identify", "/api/events"])
+        #expect(try requestBody(requests[1])["name"] as? String == "newest")
+    }
+
     private func temporaryStorageURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("growbase-tests-\(UUID().uuidString).json")

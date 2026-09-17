@@ -14,6 +14,7 @@ public enum GrowbaseClientError: Error, Equatable {
 
 public actor GrowbaseClient {
     private static let maximumPayloadSize = 64 * 1024
+    private static let maximumQueueSize = 1_000
     private static let maximumStringSize = 255
 
     private let baseURL: URL
@@ -22,6 +23,7 @@ public actor GrowbaseClient {
     private let storageURL: URL
     private let encoder: JSONEncoder
     private let automaticallyFlush: Bool
+    private let maximumQueueSize: Int
     private var state: State
     private var isFlushing = false
     private var retryTask: Task<Void, Never>?
@@ -46,14 +48,24 @@ public actor GrowbaseClient {
         Task { await self.flush() }
     }
 
-    init(baseURL: URL, trackingKey: String, session: URLSession, storageURL: URL, automaticallyFlush: Bool = false) throws {
+    init(
+        baseURL: URL,
+        trackingKey: String,
+        session: URLSession,
+        storageURL: URL,
+        automaticallyFlush: Bool = false,
+        maximumQueueSize: Int = GrowbaseClient.maximumQueueSize
+    ) throws {
         self.baseURL = baseURL
         self.trackingKey = trackingKey
         self.session = session
         self.storageURL = storageURL
         self.encoder = Self.makeEncoder()
         self.automaticallyFlush = automaticallyFlush
-        self.state = try Self.loadState(from: storageURL)
+        self.maximumQueueSize = maximumQueueSize
+        var state = try Self.loadState(from: storageURL)
+        Self.trimQueue(&state.queue, to: maximumQueueSize)
+        self.state = state
         try Self.write(state, to: storageURL, using: encoder)
     }
 
@@ -75,7 +87,7 @@ public actor GrowbaseClient {
             properties: properties
         )
         try validateSize(of: event)
-        try updateState { $0.queue.append(.event(event)) }
+        try updateState { enqueue(.event(event), in: &$0) }
         startFlush()
     }
 
@@ -88,7 +100,7 @@ public actor GrowbaseClient {
         let identify = IdentifyPayload(anonymousID: state.anonymousID, appUserID: userID, email: email)
         try validateSize(of: identify)
         try updateState {
-            $0.queue.append(.identify(identify))
+            enqueue(.identify(identify), in: &$0)
             $0.appUserID = userID
         }
         startFlush()
@@ -161,6 +173,21 @@ public actor GrowbaseClient {
     }
 
     // MARK: Persistence
+
+    private func enqueue(_ item: QueueItem, in state: inout State) {
+        state.queue.append(item)
+        Self.trimQueue(&state.queue, to: maximumQueueSize)
+    }
+
+    private static func trimQueue(_ queue: inout [QueueItem], to maximumSize: Int) {
+        while queue.count > maximumSize {
+            if let oldestEventIndex = queue.firstIndex(where: \.isEvent) {
+                queue.remove(at: oldestEventIndex)
+            } else {
+                queue.removeFirst()
+            }
+        }
+    }
 
     /// Applies `mutate` to a copy of the state and only adopts it once it has been persisted,
     /// so a failed write leaves the in-memory state untouched.
@@ -249,6 +276,10 @@ private extension GrowbaseClient {
     enum QueueItem: Codable {
         case event(EventPayload)
         case identify(IdentifyPayload)
+
+        var isEvent: Bool {
+            if case .event = self { true } else { false }
+        }
 
         var path: String {
             switch self {
