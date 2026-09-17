@@ -23,7 +23,7 @@ public actor GrowbaseClient {
     private let storageURL: URL
     private let encoder: JSONEncoder
     private let automaticallyFlush: Bool
-    private let maximumQueueSize: Int
+    private let queueLimit: Int
     private var state: State
     private var isFlushing = false
     private var retryTask: Task<Void, Never>?
@@ -62,9 +62,9 @@ public actor GrowbaseClient {
         self.storageURL = storageURL
         self.encoder = Self.makeEncoder()
         self.automaticallyFlush = automaticallyFlush
-        self.maximumQueueSize = maximumQueueSize
+        self.queueLimit = maximumQueueSize
         var state = try Self.loadState(from: storageURL)
-        Self.trimQueue(&state.queue, to: maximumQueueSize)
+        state.trimQueue(to: maximumQueueSize)
         self.state = state
         try Self.write(state, to: storageURL, using: encoder)
     }
@@ -87,7 +87,7 @@ public actor GrowbaseClient {
             properties: properties
         )
         try validateSize(of: event)
-        try updateState { enqueue(.event(event), in: &$0) }
+        try updateState { $0.enqueue(.event(event), maximumCount: queueLimit) }
         startFlush()
     }
 
@@ -100,7 +100,7 @@ public actor GrowbaseClient {
         let identify = IdentifyPayload(anonymousID: state.anonymousID, appUserID: userID, email: email)
         try validateSize(of: identify)
         try updateState {
-            enqueue(.identify(identify), in: &$0)
+            $0.enqueue(.identify(identify), maximumCount: queueLimit)
             $0.appUserID = userID
         }
         startFlush()
@@ -173,21 +173,6 @@ public actor GrowbaseClient {
     }
 
     // MARK: Persistence
-
-    private func enqueue(_ item: QueueItem, in state: inout State) {
-        state.queue.append(item)
-        Self.trimQueue(&state.queue, to: maximumQueueSize)
-    }
-
-    private static func trimQueue(_ queue: inout [QueueItem], to maximumSize: Int) {
-        while queue.count > maximumSize {
-            if let oldestEventIndex = queue.firstIndex(where: \.isEvent) {
-                queue.remove(at: oldestEventIndex)
-            } else {
-                queue.removeFirst()
-            }
-        }
-    }
 
     /// Applies `mutate` to a copy of the state and only adopts it once it has been persisted,
     /// so a failed write leaves the in-memory state untouched.
@@ -271,6 +256,17 @@ private extension GrowbaseClient {
         var anonymousID: String
         var appUserID: String?
         var queue: [QueueItem] = []
+
+        mutating func enqueue(_ item: QueueItem, maximumCount: Int) {
+            queue.append(item)
+            trimQueue(to: maximumCount)
+        }
+
+        mutating func trimQueue(to maximumCount: Int) {
+            while queue.count > maximumCount {
+                queue.remove(at: queue.firstIndex(where: \.isEvent) ?? queue.startIndex)
+            }
+        }
     }
 
     enum QueueItem: Codable {
