@@ -25,4 +25,4 @@ Events and identity calls are persisted before sending, sent in order, and retri
 
 Call `flush()` when your app enters the background to start sending queued work. iOS does not guarantee enough background execution time to finish. Unauthorized requests remain queued so a corrected key can retry them; payloads rejected as invalid by the server are discarded so they cannot block later events. A successful `track`, `identify`, or `reset` call means the change was validated and saved locally, not that the server has acknowledged it.
 
-Keep one `GrowbaseClient` instance per base URL and tracking key. Instances with different keys use separate durable queues.
+Keep one `GrowbaseClient` instance in your app. The SDK uses one durable queue and preserves it when the base URL or tracking key changes.

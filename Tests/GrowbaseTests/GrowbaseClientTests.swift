@@ -68,24 +68,26 @@ struct GrowbaseClientTests {
         #expect(bodies[3]["app_user_id"] == nil)
     }
 
-    @Test func authenticationFailureRetainsQueue() async throws {
+    @Test func correctedTrackingKeyRetriesQueue() async throws {
         let storageURL = temporaryStorageURL()
         let session = makeSession()
         MockURLProtocol.responses = [401, 200]
         let analytics = try GrowbaseClient(
-            baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            baseURL: URL(string: "https://example.com")!, trackingKey: "incorrect-key",
             session: session, storageURL: storageURL
         )
         try await analytics.track("opened")
         await analytics.flush()
 
         let restored = try GrowbaseClient(
-            baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            baseURL: URL(string: "https://example.com")!, trackingKey: "corrected-key",
             session: session, storageURL: storageURL
         )
         await restored.flush()
         let requests = MockURLProtocol.requests
         #expect(requests.count == 2)
+        #expect(requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer incorrect-key")
+        #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer corrected-key")
         let firstID = try requestBody(try #require(requests.first))["event_id"] as? String
         let lastID = try requestBody(try #require(requests.last))["event_id"] as? String
         #expect(firstID == lastID)

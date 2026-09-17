@@ -35,7 +35,7 @@ public actor GrowbaseClient {
         }
         guard !trackingKey.isEmpty else { throw GrowbaseClientError.invalidTrackingKey }
 
-        let storageURL = try Self.defaultStorageURL(baseURL: baseURL, trackingKey: trackingKey)
+        let storageURL = try Self.defaultStorageURL()
         try self.init(
             baseURL: baseURL,
             trackingKey: trackingKey,
@@ -184,7 +184,7 @@ public actor GrowbaseClient {
         return try decoder.decode(State.self, from: Data(contentsOf: url))
     }
 
-    private static func defaultStorageURL(baseURL: URL, trackingKey: String) throws -> URL {
+    private static func defaultStorageURL() throws -> URL {
         let root = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -192,12 +192,7 @@ public actor GrowbaseClient {
             create: true
         ).appendingPathComponent("GrowbaseClient", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let scope = stableHash(baseURL.absoluteString + "\u{0}" + trackingKey)
-        return root.appendingPathComponent("\(scope).json")
-    }
-
-    private static func stableHash(_ value: String) -> String {
-        value.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }.description
+        return root.appendingPathComponent("state.json")
     }
 
     // MARK: Validation
