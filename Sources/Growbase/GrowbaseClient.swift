@@ -20,11 +20,11 @@ public actor GrowbaseClient {
     private let baseURL: URL
     private let trackingKey: String
     private let session: URLSession
-    private let storageURL: URL
+    private let stateStore: StateStore
     private let encoder: JSONEncoder
-    private let automaticallyFlush: Bool
+    private let shouldAutomaticallyFlush: Bool
     private let queueLimit: Int
-    private var state: State
+    private var state: ClientState
     private var isFlushing = false
     private var retryTask: Task<Void, Never>?
     private var retryAttempt = 0
@@ -37,7 +37,7 @@ public actor GrowbaseClient {
         }
         guard !trackingKey.isEmpty else { throw GrowbaseClientError.invalidTrackingKey }
 
-        let storageURL = try Self.defaultStorageURL()
+        let storageURL = try StateStore.defaultStorageURL()
         try self.init(
             baseURL: baseURL,
             trackingKey: trackingKey,
@@ -59,19 +59,15 @@ public actor GrowbaseClient {
         self.baseURL = baseURL
         self.trackingKey = trackingKey
         self.session = session
-        self.storageURL = storageURL
+        self.stateStore = StateStore(url: storageURL)
         self.encoder = Self.makeEncoder()
-        self.automaticallyFlush = automaticallyFlush
+        self.shouldAutomaticallyFlush = automaticallyFlush
         self.queueLimit = maximumQueueSize
-        var state = try Self.loadState(from: storageURL)
+        var state = try stateStore.load()
         state.trimQueue(to: maximumQueueSize)
         self.state = state
-        try Self.write(state, to: storageURL, using: encoder)
+        try stateStore.save(state)
     }
-
-    // MARK: Testing
-
-    var queuedItemCount: Int { state.queue.count }
 
     // MARK: Public
 
@@ -132,10 +128,16 @@ public actor GrowbaseClient {
         }
     }
 
+    // MARK: Testing
+
+    var queuedItemCount: Int { state.queue.count }
+
     // MARK: Sending
 
+    private enum SendResult { case acknowledge, drop, retry, stop }
+
     private func startFlush() {
-        guard automaticallyFlush, retryTask == nil else { return }
+        guard shouldAutomaticallyFlush, retryTask == nil else { return }
         Task { await flush() }
     }
 
@@ -176,35 +178,11 @@ public actor GrowbaseClient {
 
     /// Applies `mutate` to a copy of the state and only adopts it once it has been persisted,
     /// so a failed write leaves the in-memory state untouched.
-    private func updateState(_ mutate: (inout State) -> Void) throws {
+    private func updateState(_ mutate: (inout ClientState) -> Void) throws {
         var proposedState = state
         mutate(&proposedState)
-        try Self.write(proposedState, to: storageURL, using: encoder)
+        try stateStore.save(proposedState)
         state = proposedState
-    }
-
-    private static func write(_ state: State, to url: URL, using encoder: JSONEncoder) throws {
-        try encoder.encode(state).write(to: url, options: .atomic)
-    }
-
-    private static func loadState(from url: URL) throws -> State {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return State(anonymousID: UUID().uuidString)
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(State.self, from: Data(contentsOf: url))
-    }
-
-    private static func defaultStorageURL() throws -> URL {
-        let root = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ).appendingPathComponent("GrowbaseClient", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return root.appendingPathComponent("state.json")
     }
 
     // MARK: Validation
@@ -249,78 +227,4 @@ public actor GrowbaseClient {
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }
-}
-
-private extension GrowbaseClient {
-    struct State: Codable {
-        var anonymousID: String
-        var appUserID: String?
-        var queue: [QueueItem] = []
-
-        mutating func enqueue(_ item: QueueItem, maximumCount: Int) {
-            queue.append(item)
-            trimQueue(to: maximumCount)
-        }
-
-        mutating func trimQueue(to maximumCount: Int) {
-            while queue.count > maximumCount {
-                queue.remove(at: queue.firstIndex(where: \.isEvent) ?? queue.startIndex)
-            }
-        }
-    }
-
-    enum QueueItem: Codable {
-        case event(EventPayload)
-        case identify(IdentifyPayload)
-
-        var isEvent: Bool {
-            if case .event = self { true } else { false }
-        }
-
-        var path: String {
-            switch self {
-            case .event: "/api/events"
-            case .identify: "/api/identify"
-            }
-        }
-
-        func requestBody(using encoder: JSONEncoder) throws -> Data {
-            switch self {
-            case .event(let payload): try encoder.encode(payload)
-            case .identify(let payload): try encoder.encode(payload)
-            }
-        }
-    }
-
-    struct EventPayload: Codable {
-        let eventID: String
-        let name: String
-        let occurredAt: Date
-        let anonymousID: String
-        let appUserID: String?
-        let properties: [String: JSONValue]
-
-        enum CodingKeys: String, CodingKey {
-            case eventID = "event_id"
-            case name
-            case occurredAt = "occurred_at"
-            case anonymousID = "anonymous_id"
-            case appUserID = "app_user_id"
-            case properties
-        }
-    }
-
-    struct IdentifyPayload: Codable {
-        let anonymousID: String
-        let appUserID: String
-        let email: String?
-
-        enum CodingKeys: String, CodingKey {
-            case anonymousID = "anonymous_id"
-            case appUserID = "app_user_id"
-            case email
-        }
-    }
-
-    enum SendResult { case acknowledge, drop, retry, stop }
 }

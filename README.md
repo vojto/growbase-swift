@@ -53,6 +53,16 @@ Keep one `GrowbaseClient` instance in your app. The SDK uses one durable queue a
 
 ## Development
 
+The source files are organized by responsibility:
+
+- `GrowbaseClient.swift`: public API, validation, sending, and retry coordination. The actor owns all mutable client state.
+- `ClientState.swift`: persisted identity, queued items, and queue capacity rules.
+- `StateStore.swift`: state file location, loading, and atomic writes.
+- `Payloads.swift`: event and identify request bodies and their JSON field mappings.
+- `JSONValue.swift`: JSON values accepted as event properties.
+
+State changes are saved before the client adopts them in memory. Keep this ordering when adding operations, and preserve compatibility with existing state files when changing the Codable types.
+
 Run the test suite with:
 
 ```sh
