@@ -1,6 +1,28 @@
-# Growbase iOS SDK
+# Growbase Swift SDK
 
-Add this directory as a local package in Xcode with **File → Add Package Dependencies… → Add Local…**, then import `Growbase`.
+The official Swift SDK for sending analytics events and customer identities to [Growbase](https://growbase.dev).
+
+## Installation
+
+In Xcode, choose **File → Add Package Dependencies…** and enter:
+
+```text
+https://github.com/vojto/growbase-swift.git
+```
+
+Select **Up to Next Major Version** starting from `1.0.0`, then add the `Growbase` library to your app target.
+
+You can also add Growbase to another Swift package:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/vojto/growbase-swift.git", from: "1.0.0")
+]
+```
+
+Growbase supports iOS 15 or newer and macOS 12 or newer.
+
+## Usage
 
 ```swift
 import Foundation
@@ -28,3 +50,11 @@ The durable queue holds up to 1,000 items. When full, the SDK discards the oldes
 Call `flush()` when your app enters the background to start sending queued work. iOS does not guarantee enough background execution time to finish. Unauthorized requests remain queued so a corrected key can retry them; payloads rejected as invalid by the server are discarded so they cannot block later events. A successful `track`, `identify`, or `reset` call means the change was validated and saved locally, not that the server has acknowledged it.
 
 Keep one `GrowbaseClient` instance in your app. The SDK uses one durable queue and preserves it when the base URL or tracking key changes.
+
+## Development
+
+Run the test suite with:
+
+```sh
+swift test
+```
