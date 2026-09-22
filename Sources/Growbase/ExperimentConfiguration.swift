@@ -51,19 +51,3 @@ struct ExperimentConfiguration: Codable, Sendable {
         return Int(prefix.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) } % 10_000)
     }
 }
-
-struct ExperimentCache: Codable, Sendable {
-    let source: String
-    var fetchedAt: Date
-    let etag: String?
-    let experiments: [ExperimentConfiguration]
-
-    func isFresh(at date: Date = Date()) -> Bool {
-        date.timeIntervalSince(fetchedAt) < 24 * 60 * 60 && date >= fetchedAt
-    }
-
-    static func source(baseURL: URL, trackingKey: String) -> String {
-        SHA256.hash(data: Data("\(baseURL.absoluteString)\n\(trackingKey)".utf8))
-            .map { String(format: "%02x", $0) }.joined()
-    }
-}

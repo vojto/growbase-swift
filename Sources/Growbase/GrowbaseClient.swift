@@ -19,6 +19,7 @@ public actor GrowbaseClient {
 
     private let baseURL: URL
     private let trackingKey: String
+    private let experimentSource: String
     private let session: URLSession
     private let stateStore: StateStore
     private let encoder: JSONEncoder
@@ -61,6 +62,7 @@ public actor GrowbaseClient {
     ) throws {
         self.baseURL = baseURL
         self.trackingKey = trackingKey
+        self.experimentSource = ExperimentCache.source(baseURL: baseURL, trackingKey: trackingKey)
         self.session = session
         self.stateStore = StateStore(url: storageURL)
         self.encoder = Self.makeEncoder()
@@ -113,6 +115,8 @@ public actor GrowbaseClient {
         exposedExperiments.removeAll()
     }
 
+    // MARK: Experiments
+
     /// Refresh at launch and whenever the app returns to the foreground.
     /// Network failures retain the last configuration, usable for up to 24 hours.
     public func refreshExperiments() async {
@@ -130,9 +134,7 @@ public actor GrowbaseClient {
     /// queues one exposure per experiment per client lifetime (or after reset).
     /// nil means to show control without recording an exposure.
     public func variant(for key: String) throws -> String? {
-        guard let cache = state.experimentCache, cache.source == experimentSource, cache.isFresh(),
-              let experiment = cache.experiments.first(where: { $0.key == key }),
-              experiment.isValid,
+        guard let experiment = state.experimentCache?.experiment(for: key, source: experimentSource),
               let variant = experiment.variant(for: state.anonymousID) else { return nil }
 
         if !exposedExperiments.contains(key) {
@@ -145,6 +147,8 @@ public actor GrowbaseClient {
         }
         return variant
     }
+
+    // MARK: Delivery
 
     public func flush() async {
         guard !isFlushing else { return }
@@ -169,11 +173,7 @@ public actor GrowbaseClient {
 
     var queuedItemCount: Int { state.queue.count }
 
-    // MARK: Sending
-
-    private var experimentSource: String {
-        ExperimentCache.source(baseURL: baseURL, trackingKey: trackingKey)
-    }
+    // MARK: Experiment settings
 
     private func fetchExperiments() async {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/experiments"))
@@ -203,6 +203,8 @@ public actor GrowbaseClient {
             // Keep the last successfully saved configuration on network or disk failure.
         }
     }
+
+    // MARK: Sending
 
     private enum SendResult { case acknowledge, drop, retry, stop }
 

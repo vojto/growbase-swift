@@ -98,7 +98,8 @@ The source files are organized by responsibility:
 - `StateStore.swift`: state file location, loading, and atomic writes.
 - `Payloads.swift`: event and identify request bodies and their JSON field mappings.
 - `JSONValue.swift`: JSON values accepted as event properties.
-- `ExperimentConfiguration.swift`: experiment decoding, stable assignment, and cache metadata.
+- `ExperimentConfiguration.swift`: experiment decoding, validation, and stable assignment.
+- `ExperimentCache.swift`: persisted settings, server/app scoping, and expiry.
 
 State changes are saved before the client adopts them in memory. Keep this ordering when adding operations, and preserve compatibility with existing state files when changing the Codable types.
 
