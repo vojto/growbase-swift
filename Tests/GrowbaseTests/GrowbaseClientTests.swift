@@ -249,6 +249,169 @@ struct GrowbaseClientTests {
         #expect(try requestBody(requests[1])["name"] as? String == "newest")
     }
 
+    @Test func experimentAssignmentMatchesRubyAndSupportsMultipleVariants() throws {
+        // These values are also produced by Ruby's SHA256.hexdigest[0, 8].to_i(16) % 10_000.
+        #expect(ExperimentConfiguration.bucket("expose:prompt:salt:install-123") == 7614)
+        #expect(ExperimentConfiguration.bucket("split:prompt:salt:install-123") == 8108)
+        let experiment = try JSONDecoder().decode([ExperimentConfiguration].self, from: experimentJSON()).first!
+        #expect(experiment.isValid)
+        #expect(experiment.variant(for: "install-123") == "long_prompt")
+        let variants = Set((0..<100).compactMap { experiment.variant(for: "install-\($0)") })
+        #expect(variants == ["control", "short_prompt", "long_prompt"])
+    }
+
+    @Test func experimentExposureIsDurableAndDeduplicatedThroughLogin() async throws {
+        let storageURL = temporaryStorageURL()
+        let session = makeSession()
+        MockURLProtocol.body = experimentJSON()
+        let client = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: storageURL)
+        #expect(try await client.variant(for: "prompt") == nil)
+        await client.refreshExperiments()
+        let variant = try await client.variant(for: "prompt")
+        #expect(variant != nil)
+        try await client.identify("account")
+        #expect(try await client.variant(for: "prompt") == variant)
+        #expect(await client.queuedItemCount == 2)
+
+        let restored = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: storageURL)
+        #expect(try await restored.variant(for: "prompt") == variant)
+        await restored.flush()
+        let events = try MockURLProtocol.requests.filter { $0.url?.path == "/api/events" }.map(requestBody)
+        #expect(events.count == 2)
+        #expect(events.allSatisfy { $0["name"] as? String == "$experiment_exposure" })
+        let properties = try #require(events.first?["properties"] as? [String: Any])
+        #expect(properties["variant"] as? String == variant)
+        #expect(properties["experiment"] as? String == "prompt")
+        #expect(properties["config_version"] as? Int == 1)
+    }
+
+    @Test func experimentRefreshHonorsETagAndStopping() async throws {
+        let session = makeSession()
+        MockURLProtocol.body = experimentJSON()
+        MockURLProtocol.headers = ["ETag": "config-1"]
+        let client = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: temporaryStorageURL())
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") != nil)
+        MockURLProtocol.responses = [304]
+        await client.refreshExperiments()
+        #expect(MockURLProtocol.requests.last?.value(forHTTPHeaderField: "If-None-Match") == "config-1")
+        #expect(try await client.variant(for: "prompt") != nil)
+        MockURLProtocol.body = Data("[]".utf8)
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") == nil)
+        #expect(await client.queuedItemCount == 1)
+    }
+
+    @Test func experimentGateExcludesWithoutExposureAndResetRecordsNewIdentity() async throws {
+        let session = makeSession()
+        MockURLProtocol.body = experimentJSON(exposurePct: 0)
+        let client = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: temporaryStorageURL())
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") == nil)
+        #expect(try await client.variant(for: "missing") == nil)
+        #expect(await client.queuedItemCount == 0)
+        MockURLProtocol.body = experimentJSON()
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") != nil)
+        try await client.reset()
+        #expect(try await client.variant(for: "prompt") != nil)
+        await client.flush()
+        let events = try MockURLProtocol.requests.filter { $0.url?.path == "/api/events" }.map(requestBody)
+        #expect(events.count == 2)
+        #expect(events[0]["anonymous_id"] as? String != events[1]["anonymous_id"] as? String)
+    }
+
+    @Test func experimentCacheExpiresAndDoesNotLeakAcrossConfigurations() async throws {
+        let session = makeSession()
+        let storageURL = temporaryStorageURL()
+        MockURLProtocol.body = experimentJSON()
+        let client = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: storageURL)
+        await client.refreshExperiments()
+        let otherApp = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "other-key",
+            session: session, storageURL: storageURL)
+        #expect(try await otherApp.variant(for: "prompt") == nil)
+
+        let store = StateStore(url: storageURL)
+        var state = try store.load()
+        state.experimentCache?.fetchedAt = Date().addingTimeInterval(-25 * 60 * 60)
+        try store.save(state)
+        let restored = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: storageURL)
+        #expect(try await restored.variant(for: "prompt") == nil)
+        #expect(await restored.queuedItemCount == 0)
+    }
+
+    @Test func experimentFailuresKeepCacheButUnauthorizedClearsIt() async throws {
+        let session = makeSession()
+        let storageURL = temporaryStorageURL()
+        MockURLProtocol.body = experimentJSON()
+        let client = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: storageURL)
+        await client.refreshExperiments()
+        let variant = try await client.variant(for: "prompt")
+        MockURLProtocol.responses = [500]
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") == variant)
+        MockURLProtocol.body = Data("invalid json".utf8)
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") == variant)
+        MockURLProtocol.responses = [401]
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") == nil)
+        #expect(try StateStore(url: storageURL).load().experimentCache == nil)
+    }
+
+    @Test func experimentDoesNotAdoptUnsavedExposure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let session = makeSession()
+        MockURLProtocol.body = experimentJSON()
+        let client = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: directory.appendingPathComponent("state.json"))
+        await client.refreshExperiments()
+        try FileManager.default.removeItem(at: directory)
+        await #expect(throws: Error.self) { try await client.variant(for: "prompt") }
+        #expect(await client.queuedItemCount == 0)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        #expect(try await client.variant(for: "prompt") != nil)
+        #expect(await client.queuedItemCount == 1)
+    }
+
+    @Test func legacyStateWithoutExperimentsStillLoads() throws {
+        let legacy = Data(#"{"anonymousID":"existing-install","queue":[]}"#.utf8)
+        let state = try JSONDecoder().decode(ClientState.self, from: legacy)
+        #expect(state.anonymousID == "existing-install")
+        #expect(state.experimentCache == nil)
+    }
+
+    @Test func malformedExperimentRangesDoNotReplaceGoodCache() async throws {
+        let session = makeSession()
+        let client = try GrowbaseClient(baseURL: URL(string: "https://example.com")!, trackingKey: "key",
+            session: session, storageURL: temporaryStorageURL())
+        MockURLProtocol.body = experimentJSON()
+        await client.refreshExperiments()
+        let variant = try await client.variant(for: "prompt")
+        MockURLProtocol.body = Data(String(decoding: experimentJSON(), as: UTF8.self)
+            .replacingOccurrences(of: "\"bucket_start\":3333", with: "\"bucket_start\":3334").utf8)
+        await client.refreshExperiments()
+        #expect(try await client.variant(for: "prompt") == variant)
+    }
+
+    private func experimentJSON(exposurePct: Int = 100) -> Data {
+        Data("""
+        [{"key":"prompt","salt":"salt","config_version":1,"exposure_pct":\(exposurePct),"variants":[
+          {"name":"control","bucket_start":0,"bucket_end":3332},
+          {"name":"short_prompt","bucket_start":3333,"bucket_end":6665},
+          {"name":"long_prompt","bucket_start":6666,"bucket_end":9999}
+        ]}]
+        """.utf8)
+    }
+
     private func temporaryStorageURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("growbase-tests-\(UUID().uuidString).json")
@@ -283,12 +446,16 @@ struct GrowbaseClientTests {
 private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var responses: [Int] = []
     nonisolated(unsafe) static var requests: [URLRequest] = []
+    nonisolated(unsafe) static var body = Data()
+    nonisolated(unsafe) static var headers: [String: String] = [:]
     private static let lock = NSLock()
 
     static func reset() {
         lock.withLock {
             responses = []
             requests = []
+            body = Data()
+            headers = [:]
         }
     }
 
@@ -300,8 +467,9 @@ private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
             Self.requests.append(request)
             return Self.responses.isEmpty ? 200 : Self.responses.removeFirst()
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: Self.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.body)
         client?.urlProtocolDidFinishLoading(self)
     }
 

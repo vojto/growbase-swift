@@ -4,6 +4,7 @@ struct ClientState: Codable {
     var anonymousID: String
     var appUserID: String?
     var queue: [QueueItem] = []
+    var experimentCache: ExperimentCache?
 
     mutating func enqueue(_ item: QueueItem, maximumCount: Int) {
         queue.append(item)

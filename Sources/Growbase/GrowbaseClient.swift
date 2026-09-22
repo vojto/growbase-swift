@@ -28,6 +28,8 @@ public actor GrowbaseClient {
     private var isFlushing = false
     private var retryTask: Task<Void, Never>?
     private var retryAttempt = 0
+    private var experimentsRefreshTask: Task<Void, Never>?
+    private var exposedExperiments: Set<String> = []
 
     // MARK: Lifecycle
 
@@ -46,6 +48,7 @@ public actor GrowbaseClient {
             automaticallyFlush: true
         )
         Task { await self.flush() }
+        Task { await self.refreshExperiments() }
     }
 
     init(
@@ -107,6 +110,40 @@ public actor GrowbaseClient {
             $0.anonymousID = UUID().uuidString
             $0.appUserID = nil
         }
+        exposedExperiments.removeAll()
+    }
+
+    /// Refresh at launch and whenever the app returns to the foreground.
+    /// Network failures retain the last configuration, usable for up to 24 hours.
+    public func refreshExperiments() async {
+        if let task = experimentsRefreshTask {
+            await task.value
+            return
+        }
+        let task = Task { await fetchExperiments() }
+        experimentsRefreshTask = task
+        await task.value
+        experimentsRefreshTask = nil
+    }
+
+    /// Evaluate only when the experience will be shown. A successful evaluation
+    /// queues one exposure per experiment per client lifetime (or after reset).
+    /// nil means to show control without recording an exposure.
+    public func variant(for key: String) throws -> String? {
+        guard let cache = state.experimentCache, cache.source == experimentSource, cache.isFresh(),
+              let experiment = cache.experiments.first(where: { $0.key == key }),
+              experiment.isValid,
+              let variant = experiment.variant(for: state.anonymousID) else { return nil }
+
+        if !exposedExperiments.contains(key) {
+            try track("$experiment_exposure", properties: [
+                "experiment": .string(key),
+                "variant": .string(variant),
+                "config_version": .number(Double(experiment.configVersion)),
+            ])
+            exposedExperiments.insert(key)
+        }
+        return variant
     }
 
     public func flush() async {
@@ -133,6 +170,39 @@ public actor GrowbaseClient {
     var queuedItemCount: Int { state.queue.count }
 
     // MARK: Sending
+
+    private var experimentSource: String {
+        ExperimentCache.source(baseURL: baseURL, trackingKey: trackingKey)
+    }
+
+    private func fetchExperiments() async {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/experiments"))
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(trackingKey)", forHTTPHeaderField: "Authorization")
+        let cache = state.experimentCache.flatMap { $0.source == experimentSource ? $0 : nil }
+        if let etag = cache?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let response = response as? HTTPURLResponse else { return }
+            if response.statusCode == 304, var cache {
+                cache.fetchedAt = Date()
+                try updateState { $0.experimentCache = cache }
+            } else if response.statusCode == 200 {
+                let experiments = try JSONDecoder().decode([ExperimentConfiguration].self, from: data)
+                guard experiments.allSatisfy(\.isValid),
+                      Set(experiments.map(\.key)).count == experiments.count else { return }
+                let updated = ExperimentCache(source: experimentSource, fetchedAt: Date(),
+                    etag: response.value(forHTTPHeaderField: "ETag"), experiments: experiments)
+                try updateState { $0.experimentCache = updated }
+            } else if [401, 403].contains(response.statusCode) {
+                try updateState { $0.experimentCache = nil }
+            }
+        } catch {
+            // Keep the last successfully saved configuration on network or disk failure.
+        }
+    }
 
     private enum SendResult { case acknowledge, drop, retry, stop }
 
