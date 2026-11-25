@@ -51,6 +51,10 @@ Call `flush()` when your app enters the background to start sending queued work.
 
 Keep one `GrowbaseClient` instance in your app. The SDK uses one durable queue and preserves it when the base URL or tracking key changes.
 
+## Subscriptions
+
+The SDK reads StoreKit at launch and listens for new purchases. For each active auto-renewable subscription, it sends Growbase the subscription's original transaction ID, once per launch. Growbase uses it to tie Apple's revenue notifications to this customer. There is nothing to call: it works with StoreKit, RevenueCat, or any other purchase code, because it only reads transactions and never finishes them.
+
 ## Experiments
 
 Experiment APIs are currently on `main`, not the `1.0.0` tag. In Xcode, use the **Branch** dependency rule with `main`, or use `.package(url: "https://github.com/vojto/growbase-swift.git", branch: "main")` in your package manifest.

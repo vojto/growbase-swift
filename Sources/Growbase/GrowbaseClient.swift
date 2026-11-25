@@ -31,6 +31,8 @@ public actor GrowbaseClient {
     private var retryAttempt = 0
     private var experimentsRefreshTask: Task<Void, Never>?
     private var exposedExperiments: Set<String> = []
+    private var linkedSubscriptions: Set<String> = []
+    private var subscriptionWatcher: SubscriptionWatcher?
 
     // MARK: Lifecycle
 
@@ -50,6 +52,7 @@ public actor GrowbaseClient {
         )
         Task { await self.flush() }
         Task { await self.refreshExperiments() }
+        Task { await self.watchSubscriptions() }
     }
 
     init(
@@ -113,6 +116,7 @@ public actor GrowbaseClient {
             $0.appUserID = nil
         }
         exposedExperiments.removeAll()
+        linkedSubscriptions.removeAll()
     }
 
     // MARK: Experiments
@@ -146,6 +150,29 @@ public actor GrowbaseClient {
             exposedExperiments.insert(key)
         }
         return variant
+    }
+
+    // MARK: Subscriptions
+
+    /// Tells Growbase which App Store subscription this user owns, so Apple's
+    /// revenue events can be tied to them. Called automatically from StoreKit;
+    /// each subscription is reported once per client lifetime.
+    func linkSubscription(originalTransactionID: String) throws {
+        guard !linkedSubscriptions.contains(originalTransactionID) else { return }
+        let payload = SubscriptionPayload(
+            anonymousID: state.anonymousID,
+            appUserID: state.appUserID,
+            originalTransactionID: originalTransactionID
+        )
+        try updateState { $0.enqueue(.subscription(payload), maximumCount: queueLimit) }
+        linkedSubscriptions.insert(originalTransactionID)
+        startFlush()
+    }
+
+    private func watchSubscriptions() {
+        subscriptionWatcher = SubscriptionWatcher { [weak self] originalTransactionID in
+            try? await self?.linkSubscription(originalTransactionID: originalTransactionID)
+        }
     }
 
     // MARK: Delivery

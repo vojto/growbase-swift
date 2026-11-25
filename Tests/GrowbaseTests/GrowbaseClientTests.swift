@@ -38,6 +38,28 @@ struct GrowbaseClientTests {
         #expect(requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer key")
     }
 
+    @Test func linksEachSubscriptionOnceWithTheCurrentIdentity() async throws {
+        MockURLProtocol.responses = [200, 200]
+        let analytics = try GrowbaseClient(
+            baseURL: URL(string: "https://example.com")!,
+            trackingKey: "key",
+            session: makeSession(),
+            storageURL: temporaryStorageURL()
+        )
+
+        try await analytics.identify("user-1")
+        try await analytics.linkSubscription(originalTransactionID: "2000000812345678")
+        try await analytics.linkSubscription(originalTransactionID: "2000000812345678")
+        await analytics.flush()
+
+        let requests = MockURLProtocol.requests
+        #expect(requests.map(\.url!.path) == ["/api/identify", "/api/subscriptions"])
+        let body = try requestBody(requests[1])
+        #expect(body["original_transaction_id"] as? String == "2000000812345678")
+        #expect(body["app_user_id"] as? String == "user-1")
+        #expect(body["anonymous_id"] as? String != nil)
+    }
+
     @Test func identifyAndResetPreserveQueuedIdentitySnapshots() async throws {
         let storageURL = temporaryStorageURL()
         MockURLProtocol.responses = Array(repeating: 200, count: 5)

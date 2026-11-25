@@ -29,3 +29,15 @@ struct IdentifyPayload: Codable {
         case email
     }
 }
+
+struct SubscriptionPayload: Codable {
+    let anonymousID: String
+    let appUserID: String?
+    let originalTransactionID: String
+
+    enum CodingKeys: String, CodingKey {
+        case anonymousID = "anonymous_id"
+        case appUserID = "app_user_id"
+        case originalTransactionID = "original_transaction_id"
+    }
+}

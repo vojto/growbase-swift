@@ -21,6 +21,7 @@ struct ClientState: Codable {
 enum QueueItem: Codable {
     case event(EventPayload)
     case identify(IdentifyPayload)
+    case subscription(SubscriptionPayload)
 
     var isEvent: Bool {
         if case .event = self { true } else { false }
@@ -30,6 +31,7 @@ enum QueueItem: Codable {
         switch self {
         case .event: "/api/events"
         case .identify: "/api/identify"
+        case .subscription: "/api/subscriptions"
         }
     }
 
@@ -37,6 +39,7 @@ enum QueueItem: Codable {
         switch self {
         case .event(let payload): try encoder.encode(payload)
         case .identify(let payload): try encoder.encode(payload)
+        case .subscription(let payload): try encoder.encode(payload)
         }
     }
 }
