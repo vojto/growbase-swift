@@ -53,7 +53,7 @@ Keep one `GrowbaseClient` instance in your app. The SDK uses one durable queue a
 
 ## Subscriptions
 
-The SDK reads StoreKit at launch and listens for new purchases. For each active auto-renewable subscription, it sends Growbase the subscription's original transaction ID, once per launch. Growbase uses it to tie Apple's revenue notifications to this customer. There is nothing to call: it works with StoreKit, RevenueCat, or any other purchase code, because it only reads transactions and never finishes them.
+The SDK reads StoreKit at launch, again every time the app becomes active, and listens for transaction updates. For each active auto-renewable subscription, it sends Growbase the subscription's original transaction ID, once per launch. The activation check matters: Apple doesn't always send a purchase made inside the app to the updates listener, but the App Store purchase sheet makes the app inactive, so the check that runs when it closes finds the new subscription. Growbase uses it to tie Apple's revenue notifications to this customer. There is nothing to call: it works with StoreKit, RevenueCat, or any other purchase code, because it only reads transactions and never finishes them.
 
 ## Experiments
 
